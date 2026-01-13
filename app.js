@@ -20,7 +20,7 @@ app.use(
 );
 
 // Routes
-app.use(routes);
+app.use("/api",routes);
 
 // Error Handling
 app.use(notFound);
