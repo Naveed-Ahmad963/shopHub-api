@@ -13,14 +13,14 @@ import userRoutes from "./userRoutes.js";
 
 const router = express.Router();
 
-router.use("/api/auth", authRoutes);
-router.use("/api/cart", cartRoutes);
-router.use("/api/categories", categoryRoutes);
-router.use("/api/contact", contactRoutes);
-router.use("/api/orders", orderRoutes);
-router.use("/api/payment", paymentRoutes);
-router.use("/api/products", productRoutes);
-router.use("/api/reviews", reviewRoutes);
-router.use("/api/users", userRoutes);
+router.use("/auth", authRoutes);
+router.use("/cart", cartRoutes);
+router.use("/categories", categoryRoutes);
+router.use("/contact", contactRoutes);
+router.use("/orders", orderRoutes);
+router.use("/payment", paymentRoutes);
+router.use("/products", productRoutes);
+router.use("/reviews", reviewRoutes);
+router.use("/users", userRoutes);
 
 export default router;
