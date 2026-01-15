@@ -1,5 +1,4 @@
-// src/services/emailService.js (REFACTORED - Gmail with Retry Logic)
-// ============================================
+// src/services/emailService.js
 import nodemailer from "nodemailer";
 import { EMAIL_TEMPLATES } from "../constants/emailTemplates.js";
 import { logger } from "../utils/logger.js";
@@ -8,25 +7,33 @@ let transporter = null;
 
 const getTransporter = () => {
   if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-      },
-      tls: {
-        rejectUnauthorized: false, // Allow self-signed certificates
-      },
-      connectionTimeout: 10000, // 10 seconds
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
-      pool: true, // Use connection pooling
-      maxConnections: 5,
-      rateDelta: 20000,
-      rateLimit: 5,
-    });
+    // Check if SendGrid is configured
+    if (process.env.SENDGRID_API_KEY) {
+      transporter = nodemailer.createTransport({
+        host: "smtp.sendgrid.net",
+        port: 587,
+        secure: false,
+        auth: {
+          user: "apikey", // literally "apikey"
+          pass: process.env.SENDGRID_API_KEY,
+        },
+      });
+      logger.info("📧 Using SendGrid for emails");
+    } else {
+      // Fallback to Gmail
+      transporter = nodemailer.createTransport({
+        host: "smtp.gmail.com",
+        port: 587,
+        secure: false,
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASSWORD,
+        },
+        tls: { rejectUnauthorized: false },
+        connectionTimeout: 10000,
+      });
+      logger.info("📧 Using Gmail for emails");
+    }
   }
   return transporter;
 };
@@ -36,113 +43,55 @@ const sendEmail = async (to, subject, html, retries = 3) => {
     try {
       const transporter = getTransporter();
       
+      // Use SendGrid sender or Gmail
+      const from = process.env.SENDGRID_API_KEY
+        ? "ShopHub <noreply@shophub.com>"
+        : process.env.EMAIL_USER;
+
       await transporter.sendMail({
-        from: process.env.EMAIL_USER,
+        from,
         to,
         subject,
         html,
       });
 
-      logger.success(`✅ Email sent to ${to} (attempt ${attempt}/${retries})`);
+      logger.success(`✅ Email sent to ${to}`);
       return true;
     } catch (error) {
-      logger.error(`❌ Attempt ${attempt}/${retries} failed for ${to}: ${error.message}`);
-
-      // If this was the last attempt, throw error
+      logger.error(`❌ Attempt ${attempt}/${retries} failed: ${error.message}`);
+      
       if (attempt === retries) {
-        throw new Error(`Failed to send email after ${retries} attempts: ${error.message}`);
+        throw new Error(`Failed to send email: ${error.message}`);
       }
-
-      // Wait before retrying (exponential backoff: 2s, 4s, 6s)
-      const waitTime = 2000 * attempt;
-      logger.info(`⏳ Retrying in ${waitTime / 1000} seconds...`);
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
+      
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
     }
   }
 };
 
 export const emailService = {
   async sendOtpEmail(email, otp) {
-    try {
-      return await sendEmail(
-        email,
-        "Email Verification - ShopHub",
-        EMAIL_TEMPLATES.OTP(otp)
-      );
-    } catch (error) {
-      logger.error(`Failed to send OTP email: ${error.message}`);
-      throw error;
-    }
+    return sendEmail(email, "Email Verification - ShopHub", EMAIL_TEMPLATES.OTP(otp));
   },
-
   async sendPasswordResetEmail(user, resetToken) {
-    try {
-      const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
-      return await sendEmail(
-        user.email,
-        "Password Reset Request - ShopHub",
-        EMAIL_TEMPLATES.PASSWORD_RESET(user.name, resetUrl)
-      );
-    } catch (error) {
-      logger.error(`Failed to send password reset email: ${error.message}`);
-      throw error;
-    }
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+    return sendEmail(user.email, "Password Reset Request - ShopHub", EMAIL_TEMPLATES.PASSWORD_RESET(user.name, resetUrl));
   },
-
   async sendPasswordChangeConfirmation(user) {
     try {
-      await sendEmail(
-        user.email,
-        "Password Changed Successfully - ShopHub",
-        EMAIL_TEMPLATES.PASSWORD_CHANGED(user.name)
-      );
+      await sendEmail(user.email, "Password Changed Successfully - ShopHub", EMAIL_TEMPLATES.PASSWORD_CHANGED(user.name));
       return true;
     } catch (error) {
-      logger.warn(`Confirmation email failed but password was changed: ${error.message}`);
-      return false; // Don't fail the password change if email fails
+      logger.warn("Confirmation email failed but password was changed");
+      return false;
     }
   },
-
   async sendContactEmails(contactData) {
-    try {
-      // Send to admin
-      await sendEmail(
-        process.env.ADMIN_EMAIL,
-        `New Contact Form: ${contactData.subject}`,
-        EMAIL_TEMPLATES.CONTACT_ADMIN(
-          contactData.firstName,
-          contactData.lastName,
-          contactData.email,
-          contactData.phone,
-          contactData.subject,
-          contactData.message
-        )
-      );
-
-      // Send confirmation to user
-      await sendEmail(
-        contactData.email,
-        "We received your message - ShopHub",
-        EMAIL_TEMPLATES.CONTACT_USER(contactData.firstName, contactData.subject)
-      );
-
-      return true;
-    } catch (error) {
-      logger.error(`Failed to send contact emails: ${error.message}`);
-      throw error;
-    }
+    await sendEmail(process.env.ADMIN_EMAIL, `New Contact Form: ${contactData.subject}`, EMAIL_TEMPLATES.CONTACT_ADMIN(contactData.firstName, contactData.lastName, contactData.email, contactData.phone, contactData.subject, contactData.message));
+    await sendEmail(contactData.email, "We received your message - ShopHub", EMAIL_TEMPLATES.CONTACT_USER(contactData.firstName, contactData.subject));
+    return true;
   },
-
   async sendContactReply(contact, reply) {
-    try {
-      return await sendEmail(
-        contact.email,
-        `Re: ${contact.subject}`,
-        EMAIL_TEMPLATES.CONTACT_REPLY(contact.firstName, contact.subject, reply)
-      );
-    } catch (error) {
-      logger.error(`Failed to send contact reply: ${error.message}`);
-      throw error;
-    }
+    return sendEmail(contact.email, `Re: ${contact.subject}`, EMAIL_TEMPLATES.CONTACT_REPLY(contact.firstName, contact.subject, reply));
   },
 };
