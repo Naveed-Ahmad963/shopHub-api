@@ -1,64 +1,50 @@
-// src/services/emailService.js (REFACTORED - Gmail with Retry Logic)
+// src/services/emailService.js (SendGrid REST API - NO SMTP)
 // ============================================
-import nodemailer from "nodemailer";
+import sgMail from "@sendgrid/mail";
 import { EMAIL_TEMPLATES } from "../constants/emailTemplates.js";
 import { logger } from "../utils/logger.js";
 
-let transporter = null;
+// Initialize SendGrid with API key
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  console.log("📧 SendGrid initialized with REST API");
+} else {
+  console.error("❌ SENDGRID_API_KEY not found in environment variables");
+}
 
-const getTransporter = () => {
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-      },
-      tls: {
-        rejectUnauthorized: false, // Allow self-signed certificates
-      },
-      connectionTimeout: 10000, // 10 seconds
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
-      pool: true, // Use connection pooling
-      maxConnections: 5,
-      rateDelta: 20000,
-      rateLimit: 5,
-    });
-  }
-  return transporter;
-};
-
+/**
+ * Send email using SendGrid REST API (not SMTP)
+ * This avoids Railway's SMTP port blocking issues
+ */
 const sendEmail = async (to, subject, html, retries = 3) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const transporter = getTransporter();
-
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
+      const msg = {
         to,
+        from: process.env.EMAIL_FROM || process.env.EMAIL_USER || "noreply@shophub.com",
         subject,
         html,
-      });
+      };
 
-      logger.success(`✅ Email sent to ${to} (attempt ${attempt}/${retries})`);
+      await sgMail.send(msg);
+      
+      logger.success(`✅ Email sent to ${to} via SendGrid API (attempt ${attempt}/${retries})`);
       return true;
     } catch (error) {
-      logger.error(
-        `❌ Attempt ${attempt}/${retries} failed for ${to}: ${error.message}`
-      );
+      logger.error(`❌ Attempt ${attempt}/${retries} failed for ${to}: ${error.message}`);
+      
+      // Log detailed error from SendGrid
+      if (error.response) {
+        console.error("SendGrid error details:", error.response.body);
+      }
 
       // If this was the last attempt, throw error
       if (attempt === retries) {
-        throw new Error(
-          `Failed to send email after ${retries} attempts: ${error.message}`
-        );
+        throw new Error(`Failed to send email after ${retries} attempts: ${error.message}`);
       }
 
-      // Wait before retrying (exponential backoff: 2s, 4s, 6s)
-      const waitTime = 2000 * attempt;
+      // Wait before retrying (1s, 2s, 3s)
+      const waitTime = 1000 * attempt;
       logger.info(`⏳ Retrying in ${waitTime / 1000} seconds...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
@@ -102,9 +88,7 @@ export const emailService = {
       );
       return true;
     } catch (error) {
-      logger.warn(
-        `Confirmation email failed but password was changed: ${error.message}`
-      );
+      logger.warn(`Confirmation email failed but password was changed: ${error.message}`);
       return false; // Don't fail the password change if email fails
     }
   },
